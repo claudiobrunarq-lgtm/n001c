@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#e9dfe8" />
+  <title>Arquitectura del Encuentro</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar" aria-label="Navegación principal">
+      <button class="icon-btn" id="backBtn" aria-label="Volver">‹</button>
+      <div>
+        <p class="eyebrow" id="roomType">Umbral</p>
+        <h1 id="roomTitle">Arquitectura del Encuentro</h1>
+      </div>
+      <button class="icon-btn" id="menuBtn" aria-label="Abrir mapa">☰</button>
+    </header>
+
+    <main id="room" class="room room-access" tabindex="-1"></main>
+
+    <nav class="dock" aria-label="Habitaciones">
+      <button data-route="access" class="dock-item active"><span>◌</span><small>Entrar</small></button>
+      <button data-route="breakfast" class="dock-item"><span>☕</span><small>Desayuno</small></button>
+      <button data-route="mirror" class="dock-item"><span>◐</span><small>Espejo</small></button>
+      <button data-route="bridge" class="dock-item"><span>↔</span><small>Puente</small></button>
+      <button data-route="lab" class="dock-item"><span>✦</span><small>Lab</small></button>
+      <button data-route="garden" class="dock-item"><span>✿</span><small>Jardín</small></button>
+    </nav>
+
+    <aside class="map-panel" id="mapPanel" aria-hidden="true">
+      <div class="map-card">
+        <div class="map-head">
+          <div>
+            <p class="eyebrow">Mapa de la casa</p>
+            <h2>Elegí un espacio</h2>
+          </div>
+          <button class="icon-btn" id="closeMap">×</button>
+        </div>
+        <div id="mapLinks" class="map-links"></div>
+      </div>
+    </aside>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
