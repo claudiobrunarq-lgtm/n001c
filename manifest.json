@@ -1,14 +1,14 @@
 {
   "name": "Arquitectura del Encuentro",
-  "short_name": "Encuentro",
-  "description": "Una casa íntima para seguir descubriéndose.",
+  "short_name": "La Casa",
+  "description": "Un espacio íntimo para Claudio y Noe.",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#f7f1ef",
-  "theme_color": "#e9dfe8",
+  "background_color": "#efe7df",
+  "theme_color": "#efe7df",
   "orientation": "portrait-primary",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+    {"src":"./icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"./icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
   ]
 }
