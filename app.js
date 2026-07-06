@@ -1,207 +1,111 @@
-/* Arquitectura del Encuentro v0.4
-   Prioridades: presencia en tiempo real, alertas in-app, propuestas según interacción,
-   multimedia paralela por WhatsApp. */
-const $ = (q, el=document) => el.querySelector(q);
-const $$ = (q, el=document) => [...el.querySelectorAll(q)];
-const view = $('#view');
-const routes = ['home','bedroom','mirror','bridge','lab','garden'];
-const otherOf = name => name === 'Claudio' ? 'Noe' : 'Claudio';
-const now = () => Date.now();
-const fmt = ts => new Date(ts||Date.now()).toLocaleString('es-AR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
-const wa = text => `https://wa.me/?text=${encodeURIComponent(text)}`;
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js";
+import { getDatabase, ref, set, push, onValue, onDisconnect, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-database.js";
 
-const LS = {
-  house: localStorage.getItem('ae.house') || 'claudio-noe',
-  name: localStorage.getItem('ae.name') || '',
-  route: localStorage.getItem('ae.route') || 'home',
-};
-
-let state = { feed: {}, presence: {}, mirror: {}, bridge: {}, discoveries: {}, suggestion: null };
-let lastSeenFeed = new Set();
-let db = null, houseRef = null, connected = false, unsub = [];
-
-function firebaseReady(){
-  return window.AE_FIREBASE && !window.AE_FIREBASE.demoMode && window.firebase && window.AE_FIREBASE.config?.apiKey && !window.AE_FIREBASE.config.apiKey.includes('PEGAR');
-}
-
+const cfg = window.AE_FIREBASE || { demoMode: true };
+let db = null;
+let state = { person:'Claudio', house:'claudio-noe', room:'umbral', online:false, data:{entries:{}, presence:{}, garden:{}} };
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const questions = [
+  '¿Qué gesto pequeño podría hacernos sentir más cerca hoy?',
+  '¿Qué parte de esta semana te gustaría que el otro entienda mejor?',
+  '¿Qué recuerdo nuestro merece volver a la mesa esta mañana?',
+  '¿Qué necesitás recibir hoy sin tener que explicarlo demasiado?',
+  '¿Qué te gustaría cuidar de nosotros durante este día?'
+];
+const proposals = [
+  {key:'cansancio', title:'Presencia sin demanda', body:'Diez minutos juntos, sin hablar de obligaciones. Una mano sobre la otra. Nada tiene que avanzar.'},
+  {key:'contacto', title:'Mapa de manos', body:'Durante ocho minutos, recorrer manos, brazos y hombros. Sin objetivo. Sólo detectar dónde aparece calma.'},
+  {key:'puente', title:'Traducción breve', body:'Cada uno completa: “Cuando hago ___, a veces quiero decir ___”. Después sólo preguntan para entender.'},
+  {key:'juego', title:'Pedido cómplice', body:'Uno envía por WhatsApp un audio de menos de 30 segundos: “Hoy me gustaría que recuerdes…”'},
+  {key:'desayuno', title:'Una taza, una frase', body:'En el próximo desayuno, cada uno responde: “Hoy entro a La Casa con…”'}
+];
+function safeKey(v){ return String(v||'casa').trim().toLowerCase().replace(/[^a-z0-9-_]/gi,'-').slice(0,50) || 'casa'; }
+function now(){ return new Date().toLocaleString('es-AR',{dateStyle:'short',timeStyle:'short'}); }
 function initFirebase(){
-  if(!firebaseReady()) return false;
-  try{
-    if(!firebase.apps.length) firebase.initializeApp(window.AE_FIREBASE.config);
-    db = firebase.database();
-    houseRef = db.ref(`houses/${LS.house}`);
-    connected = true;
-    return true;
-  }catch(e){ console.warn(e); connected = false; return false; }
+  if(cfg.demoMode){ $('#modeBadge').textContent='Modo demo/local: activá Firebase para tiempo real.'; return; }
+  try{ const app = initializeApp(cfg.firebaseConfig); db = getDatabase(app); $('#modeBadge').textContent='Firebase listo: La Casa puede compartirse.'; }
+  catch(e){ console.error(e); $('#modeBadge').textContent='No se pudo iniciar Firebase. Revisar firebase-config.js'; }
 }
-
-function localGet(){ return JSON.parse(localStorage.getItem('ae.localState') || '{}'); }
-function localSet(obj){ localStorage.setItem('ae.localState', JSON.stringify(obj)); }
-
-function write(path, value){
-  if(connected) return houseRef.child(path).set(value);
-  const s = localGet();
-  const parts = path.split('/'); let cur = s;
-  while(parts.length>1){ const p=parts.shift(); cur[p]=cur[p]||{}; cur=cur[p]; }
-  cur[parts[0]]=value; localSet(s); state = {...state, ...s}; render();
+function path(p){ return `houses/${safeKey(state.house)}/${p}`; }
+function enter(){
+  state.person = $('#personSelect').value; state.house = $('#houseCode').value || 'claudio-noe';
+  $('#gate').classList.remove('active'); $('#home').classList.add('active');
+  $('#breakfastQuestion').textContent = questions[new Date().getDate() % questions.length];
+  setRoom('umbral'); bindRealtime(); writePresence();
 }
-function push(path, value){
-  if(connected) return houseRef.child(path).push(value);
-  const s = localGet(); const key = 'local_'+Date.now()+Math.random().toString(36).slice(2,6);
-  s[path]=s[path]||{}; s[path][key]=value; localSet(s); state={...state,...s}; render();
-}
-function update(path, value){
-  if(connected) return houseRef.child(path).update(value);
-  const s = localGet(); s[path]={...(s[path]||{}),...value}; localSet(s); state={...state,...s}; render();
-}
-
-function listen(){
-  if(connected){
-    houseRef.on('value', snap => {
-      const incoming = snap.val() || {};
-      const old = state.feed || {};
-      state = {...state, ...incoming};
-      detectNewFeed(old, state.feed || {});
-      render();
-    });
-    if(LS.name){
-      const p = houseRef.child(`presence/${LS.name}`);
-      p.onDisconnect().update({online:false,last:firebase.database.ServerValue.TIMESTAMP});
-      setInterval(()=> p.update({online:true,last:firebase.database.ServerValue.TIMESTAMP, route:LS.route}), 12000);
-      p.update({online:true,last:firebase.database.ServerValue.TIMESTAMP, route:LS.route});
-    }
-  }else{
-    state = {...state, ...localGet()};
+function bindRealtime(){
+  if(db){
+    onValue(ref(db,path('entries')), snap => { state.data.entries=snap.val()||{}; renderFeed(); renderProposal(); alertOther(); });
+    onValue(ref(db,path('presence')), snap => { state.data.presence=snap.val()||{}; renderPresence(); });
+    onValue(ref(db,path('garden')), snap => { state.data.garden=snap.val()||{}; renderGarden(); });
+  } else {
+    const raw = localStorage.getItem('ae-demo-'+safeKey(state.house));
+    state.data = raw ? JSON.parse(raw) : {entries:{},presence:{},garden:{}};
+    renderFeed(); renderGarden(); renderProposal(); renderPresence();
   }
 }
-
-function detectNewFeed(oldFeed, newFeed){
-  const entries = Object.entries(newFeed||{});
-  entries.forEach(([id,item])=>{
-    if(!oldFeed[id] && item?.who && item.who !== LS.name){
-      alertHouse(`${item.who} dejó algo en ${roomName(item.room)}.`);
-    }
-  });
+function persistLocal(){ localStorage.setItem('ae-demo-'+safeKey(state.house), JSON.stringify(state.data)); renderFeed(); renderGarden(); renderProposal(); }
+function writePresence(){
+  const info = {person:state.person, room:state.room, at:Date.now()};
+  if(db){ const r=ref(db,path(`presence/${state.person}`)); set(r,info); onDisconnect(r).remove(); }
+  else { state.data.presence[state.person]=info; persistLocal(); }
 }
-
-function alertHouse(msg){
-  if(navigator.vibrate) navigator.vibrate([60,30,60]);
-  const t = document.createElement('div'); t.className='toast'; t.textContent=msg; document.body.appendChild(t);
-  setTimeout(()=>t.remove(),3600);
-  document.title = '✦ '+msg;
-  setTimeout(()=>document.title='Arquitectura del Encuentro',5000);
-  if('Notification' in window && Notification.permission === 'granted') new Notification('La Casa', {body:msg, icon:'./icon-192.png'});
-}
-
-function roomName(r){ return ({home:'La Casa',bedroom:'La Habitación',mirror:'El Espejo',bridge:'El Puente',lab:'El Laboratorio',garden:'El Jardín'})[r]||r; }
-function setRoute(route){ LS.route=route; localStorage.setItem('ae.route',route); $$('.dock-item').forEach(b=>b.classList.toggle('active',b.dataset.route===route)); if(connected && LS.name) update(`presence/${LS.name}`,{route,online:true,last:now()}); render(); }
-
-document.addEventListener('click', e=>{
-  const d=e.target.closest('[data-route]'); if(d) setRoute(d.dataset.route);
-  const action=e.target.closest('[data-action]'); if(action) actions[action.dataset.action]?.(action);
-});
-document.addEventListener('input', e=>{
-  const r=e.target.closest('input[type=range][data-live]');
-  if(r && LS.name){
-    write(`live/${LS.name}/${r.dataset.live}`, {value:+r.value, at:now()});
-    const out = $(`[data-out="${r.dataset.live}"]`); if(out) out.textContent=r.value;
+function save(space){
+  const values = {}; $$(`#space-${space} input[type=range]`).forEach(i=>values[i.dataset.field]=Number(i.value));
+  const textEl = $(`#${space}Text`); const text = textEl ? textEl.value.trim() : '';
+  const prompt = space==='puente' ? $('#bridgePrompt').value : space==='cama' ? $('#breakfastQuestion').textContent : '';
+  const entry = {person:state.person, space, text, prompt, values, at:Date.now(), atLabel:now()};
+  if(db) push(ref(db,path('entries')), entry);
+  else { const k='k'+Date.now(); state.data.entries[k]=entry; persistLocal(); }
+  if(space==='jardin'){
+    const g = {person:state.person, text, at:Date.now(), atLabel:now()};
+    if(db) push(ref(db,path('garden')), g); else { state.data.garden['g'+Date.now()]=g; persistLocal(); }
   }
-});
-
-const actions = {
-  enter(){
-    const name=$('#name').value, house=($('#house').value||'claudio-noe').trim().toLowerCase().replace(/[^a-z0-9-]/g,'-');
-    if(!name) return alertHouse('Elegí quién entra a La Casa.');
-    localStorage.setItem('ae.name',name); localStorage.setItem('ae.house',house); location.reload();
-  },
-  notify(){ if('Notification' in window) Notification.requestPermission().then(p=>alertHouse(p==='granted'?'Alertas activadas en este dispositivo.':'Las alertas quedaron desactivadas.')); },
-  saveBedroom(){ saveText('bedroom',$('#bedroomText').value,'desayuno'); $('#bedroomText').value=''; },
-  saveMirror(){
-    const payload = {energia:+$('#energia').value, contacto:+$('#contacto').value, pudor:+$('#pudor').value, deseo:+$('#deseo').value, silencio:+$('#silencio').value, cuerpo:$('#cuerpo').value, at:now()};
-    write(`mirror/${LS.name}`, payload);
-    push('feed',{who:LS.name,room:'mirror',type:'estado',text:`Energía ${payload.energia}/10 · Contacto ${payload.contacto}/10 · Deseo ${payload.deseo}/10`, at:now()});
-    alertHouse('Tu estado quedó en El Espejo.');
-  },
-  saveBridge(){ saveText('bridge',$('#bridgeText').value,'traducción'); $('#bridgeText').value=''; },
-  saveGarden(){ saveText('garden',$('#gardenText').value,'descubrimiento'); $('#gardenText').value=''; },
-  newSuggestion(){ const s = makeSuggestion(); write('suggestion', s); push('feed',{who:'La Casa',room:'lab',type:'propuesta',text:s.title, at:now()}); },
-  acceptSuggestion(){ const s=state.suggestion; if(!s) return; push('feed',{who:LS.name,room:'lab',type:'acepta',text:`Acepto la experiencia: ${s.title}`,at:now()}); },
-  whatsappAudio(){ window.open(wa(`Pedido desde La Casa: ¿me dejás un audio breve? Una frase, una respiración, o algo que quieras que escuche hoy.`),'_blank'); },
-  whatsappPhoto(){ window.open(wa(`Pedido desde La Casa: ¿me dejás una foto/pista cómplice para habitar este momento? No hace falta explicar demasiado.`),'_blank'); },
-  whatsappInvite(){ window.open(wa(`Entré a La Casa. Te dejo la puerta entreabierta. ¿Entrás conmigo un rato? ${location.href}`),'_blank'); },
-  copyLink(){ navigator.clipboard?.writeText(location.href); alertHouse('Link copiado.'); },
-};
-function saveText(room,text,type){
-  if(!LS.name) return alertHouse('Primero elegí quién sos en La Casa.');
-  text=(text||'').trim(); if(!text) return alertHouse('Escribí algo antes de dejarlo en la casa.');
-  push('feed',{who:LS.name,room,type,text,at:now()});
+  if(textEl) textEl.value='';
+  toast('La Casa recibió tu intervención.');
 }
-
-function makeSuggestion(){
-  const m = state.mirror || {}; const me = m[LS.name] || {}; const other = m[otherOf(LS.name)] || {};
-  const avg = k => Math.round((((me[k]||5)+(other[k]||5))/2)*10)/10;
-  const energia=avg('energia'), contacto=avg('contacto'), deseo=avg('deseo'), pudor=avg('pudor'), silencio=avg('silencio');
-  let title, body, why;
-  if(silencio>=7 || energia<=4){ title='Habitación en voz baja'; body='Diez minutos en la cama sin resolver nada. Sólo una mano apoyada y una pregunta: ¿qué necesitó tu cuerpo hoy?'; why='La Casa leyó cansancio o necesidad de silencio.'; }
-  else if(contacto>=7 && pudor<=5){ title='Piel con permiso'; body='Una persona guía durante 6 minutos dónde quiere recibir contacto. La otra sólo escucha con las manos. Sin avanzar, sin obligación.'; why='Hay apertura al contacto y bajo pudor.'; }
-  else if(deseo>=7){ title='La puerta entreabierta'; body='Uno envía por WhatsApp una pista visual o de audio. El otro responde sólo con una palabra: más, pausa o cerca.'; why='Hay deseo disponible; la propuesta cuida el juego sin presionar.'; }
-  else { title='Mapa de cercanía'; body='Cada uno escribe una cosa mínima que hoy lo haría sentirse más cerca. Después eligen sólo una y la hacen simple.'; why='La Casa propone una acción pequeña para volver a encontrarse.'; }
-  return {title,body,why,energia,contacto,deseo,pudor,silencio,at:now()};
+function renderFeed(){
+  const entries = Object.values(state.data.entries||{}).sort((a,b)=>(b.at||0)-(a.at||0)).slice(0,8);
+  $('#sharedFeed').innerHTML = entries.length ? entries.map(e=>`<div class="item"><small>${e.atLabel||''} · ${e.person} · ${label(e.space)}</small><div>${escapeHtml(e.prompt?'<em>'+e.prompt+'</em><br>':'')}${escapeHtml(e.text||'Interacción registrada')}</div>${bars(e.values)}</div>`).join('') : '<div class="item">La Casa todavía está en silencio.</div>';
 }
-
-function render(){
-  if(!LS.name) return renderEntry();
-  const map={home:Home,bedroom:Bedroom,mirror:Mirror,bridge:Bridge,lab:Lab,garden:Garden};
-  view.innerHTML = map[LS.route]();
-  $$('.dock-item').forEach(b=>b.classList.toggle('active',b.dataset.route===LS.route));
+function renderGarden(){
+  const items = Object.values(state.data.garden||{}).sort((a,b)=>(b.at||0)-(a.at||0)).slice(0,6);
+  $('#gardenList').innerHTML = items.map(g=>`<div class="item"><small>${g.atLabel} · ${g.person}</small><div>${escapeHtml(g.text)}</div></div>`).join('');
 }
-
-function Shell(kicker,title,content,extra=''){
- return `<section class="space"><div class="hero"><div class="kicker">${kicker}</div><h1>${title}</h1>${content}</div>${extra}</section>`;
+function renderPresence(){
+  const p = Object.values(state.data.presence||{}).filter(x=>Date.now()-(x.at||0)<120000);
+  const other = p.find(x=>x.person!==state.person);
+  $('#presenceText').textContent = other ? `${other.person} está en ${label(other.room)}` : 'La Casa está disponible';
 }
-function presenceHtml(){
- const p=state.presence||{}; return `<div class="status">
-  ${['Claudio','Noe'].map(n=>`<span class="pill"><i class="pulse-dot ${p[n]?.online?'online':''}"></i>${n}${p[n]?.route?` · ${roomName(p[n].route)}`:''}</span>`).join('')}
-  <span class="pill">${connected?'Tiempo real activo':'Modo local / configurar Firebase'}</span>
- </div>`;
+function renderProposal(){
+  const entries=Object.values(state.data.entries||{}); let avg={energia:5,apertura:5,contacto:5,cuidado:5,conversar:5}; let n={};
+  entries.slice(-12).forEach(e=>{ Object.entries(e.values||{}).forEach(([k,v])=>{avg[k]=(avg[k]||0)+v; n[k]=(n[k]||0)+1;}); });
+  Object.keys(avg).forEach(k=>{ if(n[k]) avg[k]=Math.round(avg[k]/(n[k]+1)); });
+  let p = proposals[4];
+  if(avg.energia<=4 || avg.cuidado>=7) p=proposals[0];
+  else if(avg.contacto>=7) p=proposals[1];
+  else if(entries.some(e=>e.space==='puente')) p=proposals[2];
+  else if(avg.apertura>=7) p=proposals[3];
+  $('#proposal').innerHTML=`<strong>${p.title}</strong><p>${p.body}</p><small>Propuesta generada a partir de las últimas interacciones compartidas.</small>`;
 }
-function feedHtml(room=null,limit=8){
- const items=Object.entries(state.feed||{}).map(([id,v])=>({id,...v})).sort((a,b)=>(b.at||0)-(a.at||0)).filter(x=>!room||x.room===room).slice(0,limit);
- if(!items.length) return `<p class="soft">Todavía no hay rastros en este espacio.</p>`;
- return items.map(x=>`<div class="feed-item"><div class="row between"><span><b class="who">${x.who}</b> <span class="room-tag">${roomName(x.room)}</span></span><span class="time">${fmt(x.at)}</span></div><p>${escapeHtml(x.text)}</p></div>`).join('');
+function alertOther(){
+  const entries=Object.values(state.data.entries||{}).sort((a,b)=>(b.at||0)-(a.at||0)); const last=entries[0];
+  if(last && last.person!==state.person && Date.now()-last.at<15000) toast(`${last.person} dejó algo nuevo en ${label(last.space)}.`);
 }
-function Home(){
- return Shell('Umbral compartido','La Casa',`<p>Entrar a esta casa es habitar al otro y habitarse a uno mismo. Este espacio existe para activar intimidad, bajar algunos filtros y encontrarse sin apuro.</p>${presenceHtml()}<div class="row"><button class="btn" data-action="whatsappInvite">Invitar a entrar</button><button class="btn alt" data-action="notify">Activar alertas</button></div>`,
- `<div class="card"><div class="kicker">Rastros recientes</div>${feedHtml(null,5)}</div><div class="card"><div class="kicker">Código de casa</div><p><b>${LS.house}</b></p><p class="soft">Ambos deben entrar con el mismo código para compartir la misma casa.</p></div>`);
+function setRoom(room){ state.room=room; $$('.space').forEach(s=>s.classList.remove('active')); $(`#space-${room}`).classList.add('active'); $$('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.target===room)); $('#roomTitle').textContent=label(room); writePresence(); }
+function label(s){ return ({umbral:'El Umbral',cama:'La Cama',espejo:'El Espejo',puente:'El Puente',laboratorio:'Laboratorio',jardin:'El Jardín'})[s]||s; }
+function bars(values={}){ return Object.entries(values).map(([k,v])=>`<small>${k}: ${v}/10</small>`).join(' · '); }
+function toast(msg){ const n=document.createElement('div'); n.className='note'; n.textContent=msg; $('#notifications').appendChild(n); setTimeout(()=>n.remove(),5000); }
+function escapeHtml(str){ return String(str||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+function whatsapp(text){ window.open(`https://wa.me/?text=${encodeURIComponent(text)}`,'_blank'); }
+function bindUI(){
+  $('#enterBtn').addEventListener('click',enter);
+  $$('.nav button').forEach(b=>b.addEventListener('click',()=>setRoom(b.dataset.target)));
+  $$('.save').forEach(b=>b.addEventListener('click',()=>save(b.dataset.space)));
+  $$('input[type=range]').forEach(r=>r.addEventListener('input',()=>{ r.parentElement.querySelector('b').textContent=r.value; }));
+  $('#askAudio').addEventListener('click',()=>whatsapp(`${state.person} desde La Casa: ¿me dejás un audio breve para seguir habitándonos hoy?`));
+  $('#askPhoto').addEventListener('click',()=>whatsapp(`${state.person} desde La Casa: ¿me mandás una foto-pista de algo que te gustaría compartir conmigo hoy?`));
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(()=>{});
 }
-function Bedroom(){
- return Shell('La Habitación','Desayuno en la cama',`<p>Este espacio no es una mesa: es la habitación donde empieza el día. Una pregunta, una pista, una invitación suave.</p>${presenceHtml()}`,
- `<div class="card"><div class="label">Pregunta para hoy</div><p><b>¿Qué gesto pequeño podría hacer hoy para que te sientas más habitado/a por mí?</b></p><textarea id="bedroomText" placeholder="Dejá tu respuesta para que el otro la vea..."></textarea><div class="row"><button class="btn" data-action="saveBedroom">Dejar en la cama</button><button class="btn alt whatsapp" data-action="whatsappAudio">Pedir audio</button></div></div><div class="card"><div class="kicker">Lo que quedó en la habitación</div>${feedHtml('bedroom')}</div>`);
-}
-function Slider(id,label,val=5){return `<div class="slider-card"><div class="row between"><b>${label}</b><span data-out="${id}">${val}</span></div><input id="${id}" data-live="${id}" type="range" min="0" max="10" value="${val}"></div>`}
-function Mirror(){
- const m=state.mirror?.[LS.name]||{};
- return Shell('El Espejo','Estado del cuerpo',`<p>Barras de intensidad para que el otro vea cómo llegás hoy, sin tener que adivinar.</p>${presenceHtml()}`,
- `<div class="card grid">${Slider('energia','Energía',m.energia||5)}${Slider('contacto','Necesidad de contacto',m.contacto||5)}${Slider('pudor','Pudor / reserva',m.pudor||5)}${Slider('deseo','Deseo disponible',m.deseo||5)}${Slider('silencio','Necesidad de silencio',m.silencio||5)}<div><div class="label">Mi cuerpo hoy pide...</div><textarea id="cuerpo" placeholder="descanso, calor, juego, paciencia, piel, aire..."></textarea></div><button class="btn" data-action="saveMirror">Compartir estado</button></div><div class="card"><div class="kicker">Estados compartidos</div>${mirrorCompare()}</div>`);
-}
-function mirrorCompare(){ return ['Claudio','Noe'].map(n=>{const x=state.mirror?.[n]; return `<div class="feed-item"><b>${n}</b>${x?`<p>Energía ${x.energia}/10 · Contacto ${x.contacto}/10 · Deseo ${x.deseo}/10 · Pudor ${x.pudor}/10</p><p class="soft">${escapeHtml(x.cuerpo||'')}</p>`:`<p class="soft">Aún no compartió estado.</p>`}</div>`}).join(''); }
-function Bridge(){
- return Shell('El Puente','Traductor',`<p>Un espacio para decir qué significa un gesto, un silencio o una distancia. Las respuestas se encuentran cuando ambos dejan algo.</p>${presenceHtml()}`,
- `<div class="card"><div class="label">Cuando hoy me acerco o me alejo, probablemente significa...</div><textarea id="bridgeText" placeholder="Escribí una traducción posible..."></textarea><button class="btn" data-action="saveBridge">Cruzar el puente</button></div><div class="card"><div class="kicker">Traducciones</div>${feedHtml('bridge')}</div>`);
-}
-function Lab(){
- const s=state.suggestion || makeSuggestion();
- return Shell('El Laboratorio','Experiencia compartida',`<p>La Casa lee los estados e interacciones y propone una única actividad para los dos.</p>${presenceHtml()}`,
- `<div class="card suggestion"><div class="kicker">Propuesta de La Casa</div><h2>${s.title}</h2><p>${s.body}</p><p class="soft">${s.why}</p><div class="row"><button class="btn" data-action="acceptSuggestion">Aceptar</button><button class="btn alt" data-action="newSuggestion">Otra propuesta</button></div></div><div class="card"><div class="kicker">Multimedia en paralelo</div><p class="soft">Las fotos y audios se comparten en el grupo de WhatsApp Claudio + Noe. La app propone el pedido y WhatsApp guarda el material.</p><div class="row"><button class="btn alt whatsapp" data-action="whatsappPhoto">Pedir foto/pista</button><button class="btn alt whatsapp" data-action="whatsappAudio">Pedir audio</button></div></div><div class="card"><div class="kicker">Actividad del laboratorio</div>${feedHtml('lab')}</div>`);
-}
-function Garden(){
- return Shell('El Jardín','Descubrimientos',`<p>No registra rendimiento. Guarda aquello que valió la pena descubrir.</p>${presenceHtml()}`,
- `<div class="card"><div class="label">Hoy descubrí...</div><textarea id="gardenText" placeholder="Algo pequeño, concreto, nuevo..."></textarea><button class="btn" data-action="saveGarden">Plantar descubrimiento</button></div><div class="card"><div class="kicker">Jardín compartido</div>${feedHtml('garden',20)}</div>`);
-}
-function renderEntry(){
- view.innerHTML = `<section class="space"><div class="hero"><div class="kicker">Arquitectura del Encuentro</div><h1>Entrar a La Casa</h1><p>No es entrar a una app. Es abrir un espacio compartido donde Claudio y Noe puedan encontrarse.</p><div class="label">Quién entra</div><select id="name"><option value="">Elegir...</option><option>Claudio</option><option>Noe</option></select><div class="label">Código de casa</div><input id="house" class="input" value="${LS.house}" placeholder="claudio-noe"><p class="soft">Usen exactamente el mismo código en ambos teléfonos.</p><button class="btn" data-action="enter">Entrar</button></div></section>`;
-}
-function escapeHtml(s){ return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-
-if('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(()=>{});
-initFirebase(); listen(); render();
+initFirebase(); bindUI();

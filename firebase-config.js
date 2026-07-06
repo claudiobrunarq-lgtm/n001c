@@ -1,15 +1,16 @@
-// Arquitectura del Encuentro v0.4
-// 1) Pegá acá tu configuración de Firebase Web App.
-// 2) Cambiá demoMode a false.
+// Arquitectura del Encuentro v0.5
+// Pegá acá la configuración web de Firebase y mantené demoMode en false.
+// Para pruebas sin Firebase, dejá demoMode en true.
+
 window.AE_FIREBASE = {
   demoMode: true,
-  config: {
+  firebaseConfig: {
     apiKey: "PEGAR_API_KEY",
-    authDomain: "PEGAR_AUTH_DOMAIN",
-    databaseURL: "PEGAR_DATABASE_URL",
-    projectId: "PEGAR_PROJECT_ID",
-    storageBucket: "PEGAR_STORAGE_BUCKET",
-    messagingSenderId: "PEGAR_MESSAGING_SENDER_ID",
-    appId: "PEGAR_APP_ID"
+    authDomain: "arquitectura-del-encuentro.firebaseapp.com",
+    databaseURL: "https://arquitectura-del-encuentro-default-rtdb.firebaseio.com",
+    projectId: "arquitectura-del-encuentro",
+    storageBucket: "arquitectura-del-encuentro.firebasestorage.app",
+    messagingSenderId: "49679446693",
+    appId: "1:49679446693:web:969cf85564cf79385e534c"
   }
 };
