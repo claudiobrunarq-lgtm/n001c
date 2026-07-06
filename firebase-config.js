@@ -1,11 +1,7 @@
-// Arquitectura del Encuentro v0.5
-// Pegá acá la configuración web de Firebase y mantené demoMode en false.
-// Para pruebas sin Firebase, dejá demoMode en true.
-
 window.AE_FIREBASE = {
-  demoMode: true,
+  demoMode: false,
   firebaseConfig: {
-    apiKey: "PEGAR_API_KEY",
+    apiKey: "AIzaSyB5Xmnh_YOSGNX7dUHNxpRSbVGKldosqsA",
     authDomain: "arquitectura-del-encuentro.firebaseapp.com",
     databaseURL: "https://arquitectura-del-encuentro-default-rtdb.firebaseio.com",
     projectId: "arquitectura-del-encuentro",
